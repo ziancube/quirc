@@ -55,6 +55,7 @@ int quirc_resize(struct quirc *q, int w, int h);
  */
 uint8_t *quirc_begin(struct quirc *q, int *w, int *h);
 void quirc_end(struct quirc *q);
+void quirc_end_sliding(struct quirc *q, int window_size);
 
 /* This structure describes a location in the input image buffer. */
 struct quirc_point {

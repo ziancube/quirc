@@ -14,7 +14,9 @@
  * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
+#include "quirc.h"
 #include <limits.h>
+#include <stdint.h>
 #include <string.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -310,6 +312,61 @@ static uint8_t otsu(const struct quirc *q)
 	}
 
 	// Compute threshold
+	quirc_float_t sumB = 0;
+	unsigned int q1 = 0;
+	quirc_float_t max = 0;
+	uint8_t threshold = 0;
+	for (i = 0; i <= UINT8_MAX; ++i) {
+		// Weighted background
+		q1 += histogram[i];
+		if (q1 == 0)
+			continue;
+
+		// Weighted foreground
+		const unsigned int q2 = numPixels - q1;
+		if (q2 == 0)
+			break;
+
+		sumB += i * histogram[i];
+		const quirc_float_t m1 = sumB / q1;
+		const quirc_float_t m2 = (sum - sumB) / q2;
+		const quirc_float_t m1m2 = m1 - m2;
+		const quirc_float_t variance = m1m2 * m1m2 * q1 * q2;
+		if (variance >= max) {
+			threshold = i;
+			max = variance;
+		}
+	}
+
+	return threshold;
+}
+
+static uint8_t otsu_sliding(struct quirc *q, struct quirc_window window) {
+	int x1 = window.start.x, x2 = x1 + window.size;
+	int y1 = window.start.y, y2 = y1 + window.size;
+	if (x2 > q->w) x2 = q->w;
+	if (y2 > q->h) y2 = q->h;
+
+	// Calculate histogram
+	unsigned int histogram[UINT8_MAX + 1];
+	(void)memset(histogram, 0, sizeof(histogram));
+	uint8_t (*image)[q->w] = (void*)q->image;
+	for (int y = y1; y < y2; y++) {
+		for (int x = x1; x < x2; x++) {
+			uint8_t value = image[y][x];
+			histogram[value]++;
+		}
+	}
+
+	// Calculate weighted sum of histogram values
+	quirc_float_t sum = 0;
+	unsigned int i = 0;
+	for (i = 0; i <= UINT8_MAX; ++i) {
+		sum += i * histogram[i];
+	}
+
+	// Compute threshold
+	int numPixels = (x2 - x1) * (y2 - y1);
 	quirc_float_t sumB = 0;
 	unsigned int q1 = 0;
 	quirc_float_t max = 0;
@@ -675,11 +732,11 @@ static void measure_grid_size(struct quirc *q, int index)
 	quirc_float_t bc = length(b->corners[0], c->corners[1]);
 	quirc_float_t capstone_bc_size = (length(b->corners[0], b->corners[1]) + length(c->corners[0], c->corners[1]))/2.0;
 	quirc_float_t hor_grid = 7.0 * bc / capstone_bc_size;
-	
+
 	quirc_float_t grid_size_estimate = (ver_grid + hor_grid) / 2;
 
 	int ver = (int)((grid_size_estimate - 17.0 + 2.0) / 4.0);
-	
+
 	qr->grid_size =  4*ver + 17;
 }
 
@@ -1087,6 +1144,27 @@ static void pixels_setup(struct quirc *q, uint8_t threshold)
 	}
 }
 
+static void pixels_setup_sliding(struct quirc *q, struct quirc_window window, uint8_t threshold) {
+	if (QUIRC_PIXEL_ALIAS_IMAGE) {
+		q->pixels = (quirc_pixel_t *)q->image;
+	}
+
+	int x1 = window.start.x, x2 = x1 + window.size;
+	int y1 = window.start.y, y2 = y1 + window.size;
+	if (x2 > q->w) x2 = q->w;
+	if (y2 > q->h) y2 = q->h;
+
+	uint8_t (*source)[q->w] = (void*)q->image;
+	quirc_pixel_t (*dest)[q->w] = (void*)q->pixels;
+	for (int y = y1; y < y2; y++) {
+		for (int x = x1; x < x2; x++) {
+			uint8_t value = source[y][x];
+			dest[y][x] = (value < threshold) ? QUIRC_PIXEL_BLACK : QUIRC_PIXEL_WHITE;
+		}
+	}
+
+}
+
 uint8_t *quirc_begin(struct quirc *q, int *w, int *h)
 {
 	q->num_regions = QUIRC_PIXEL_REGION;
@@ -1107,6 +1185,27 @@ void quirc_end(struct quirc *q)
 
 	uint8_t threshold = otsu(q);
 	pixels_setup(q, threshold);
+
+	for (i = 0; i < q->h; i++)
+		finder_scan(q, i);
+
+	for (i = 0; i < q->num_capstones; i++)
+		test_grouping(q, i);
+}
+
+void quirc_end_sliding(struct quirc *q, int window_size) {
+	int i;
+	for (int y = 0; y < q->h; y += window_size) {
+		for (int x = 0; x < q->w; x += window_size) {
+			struct quirc_window window;
+			window.start.x = x;
+			window.start.y = y;
+			window.size = window_size;
+			uint8_t threshold = otsu_sliding(q, window);
+			pixels_setup_sliding(q, window, threshold);
+		}
+	}
+
 
 	for (i = 0; i < q->h; i++)
 		finder_scan(q, i);

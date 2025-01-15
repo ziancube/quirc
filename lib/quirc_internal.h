@@ -100,6 +100,13 @@ struct quirc_flood_fill_vars {
 	int left_down;
 };
 
+struct quirc_window {
+	/* sub-image left-top point */
+	struct  quirc_point start;
+	/* window size */
+	int size;
+};
+
 struct quirc {
 	uint8_t			*image;
 	quirc_pixel_t		*pixels;
